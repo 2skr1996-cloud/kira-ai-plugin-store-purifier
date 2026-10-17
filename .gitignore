@@ -1,0 +1,11 @@
+# 仓库只放插件本体：测试与测试依赖留在本地，不随仓库发布
+tests/
+package.json
+node_modules/
+
+.pytest_cache/
+__pycache__/
+*.py[cod]
+*.kn-tmp
+backup/
+.DS_Store
