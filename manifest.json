@@ -1,7 +1,7 @@
 {
     "display_name": "商店净化",
     "plugin_id": "kira-ai-plugin-store-purifier",
-    "version": "3.0.0",
+    "version": "3.0.1",
     "author": "sijun",
     "description": "给插件商店每张卡片加一个「不感兴趣」按钮，点一下立刻隐藏；已标记的插件集中收纳在「不感兴趣插件」页，随时可以恢复。",
     "repo": "https://github.com/2skr1996-cloud/kira-ai-plugin-store-purifier",

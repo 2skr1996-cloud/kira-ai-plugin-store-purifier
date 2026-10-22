@@ -1,6 +1,6 @@
 /*!
  * 商店净化 · Store Purifier —— 给 KiraAI 插件商店加「不感兴趣」
- * 由 KiraAI 插件 kira-ai-plugin-store-purifier（v3.0.0）注入，也可手动单独挂载
+ * 由 KiraAI 插件 kira-ai-plugin-store-purifier（v3.0.1）注入，也可手动单独挂载
  * 功能：
  *   1) 插件商店每张卡片的「安装」按钮左侧增加「不感兴趣」按钮
  *   2) 点击后隐藏该卡片，本页剩余卡片自动往前补空位（不跨页补位；缺的那张由下次刷新时官方重排）
@@ -12,7 +12,7 @@
   'use strict';
 
   if (window.__storePurifier) return;
-  window.__storePurifier = { version: '3.0.0' };
+  window.__storePurifier = { version: '3.0.1' };
 
   // 2.x 的旧版脚本若还挂在这个页面上（旧 index.html 缓存 / 曾手动挂载过），
   // 它插进来的按钮与面板用的是 kn-ni- 前缀；先拆干净再接管，免得出现两排按钮。

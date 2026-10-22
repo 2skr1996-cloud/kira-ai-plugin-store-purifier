@@ -39,7 +39,7 @@ python injector.py --dist <dir>    # 指定 dist 目录
 <!-- store-purifier:end -->
 ```
 
-之后每 15 秒兜底检查：官方升级用 dist.zip 整包覆盖 `data/dist`，覆盖后自动重新注入，`?v=` 保证不吃旧缓存。
+官方升级用 dist.zip 整包覆盖 `data/dist` 时，注入块会跟着一起被抹掉。所以插件在 `initialize()` 里给官方的 `core.utils.dist_checker.apply_dist_archive` 挂了一层钩子：WebUI 里点「更新」是在**旧进程**里覆盖 dist 的，钩子就在覆盖返回的那一刻立刻补注入，并把仍持有旧函数对象的模块（`webui.routes.releases` 等）一并重绑定，空窗从原来的约 37 秒压到 0；覆盖发生在别的进程（launcher 的 `ensure_dist`）时，仍靠启动注入 + 15 秒兜底检查补上。`?v=` 保证不吃旧缓存。
 
 写回 `index.html` 很保守——只认合法 UTF-8，否则拒绝并告警；CRLF 原样写回；写前复核 mtime/size，撞上官方的整目录替换就放弃这一轮（避免白屏）；临时文件 + 原子替换；磁盘操作全在线程池，网络盘不会卡住主进程。`sync` 后再 `--remove` 能逐字节还原。
 
