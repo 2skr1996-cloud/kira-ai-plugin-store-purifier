@@ -1,6 +1,6 @@
 /*!
  * 商店净化 · Store Purifier —— 给 KiraAI 插件商店加「不感兴趣」
- * 由 KiraAI 插件 kira-ai-plugin-store-purifier（v3.0.1）注入，也可手动单独挂载
+ * 由 KiraAI 插件 kira-ai-plugin-store-purifier（v3.0.2）注入，也可手动单独挂载
  * 功能：
  *   1) 插件商店每张卡片的「安装」按钮左侧增加「不感兴趣」按钮
  *   2) 点击后隐藏该卡片，本页剩余卡片自动往前补空位（不跨页补位；缺的那张由下次刷新时官方重排）
@@ -12,7 +12,7 @@
   'use strict';
 
   if (window.__storePurifier) return;
-  window.__storePurifier = { version: '3.0.1' };
+  window.__storePurifier = { version: '3.0.2' };
 
   // 2.x 的旧版脚本若还挂在这个页面上（旧 index.html 缓存 / 曾手动挂载过），
   // 它插进来的按钮与面板用的是 kn-ni- 前缀；先拆干净再接管，免得出现两排按钮。
@@ -40,6 +40,14 @@
   var BTN_NEUTRAL = 'px-3 py-1.5 text-xs font-medium rounded-md border border-gray-300 text-theme-body hover:bg-gray-50 dark:border-gray-600 dark:hover:bg-gray-800 transition-colors';
   // 蓝色描边按钮：自建卡片上的「取消隐藏」与「安装」观感一致，共用一套样式
   var BTN_PRIMARY = 'px-3 py-1.5 text-xs font-medium rounded-md border border-blue-300 text-blue-600 hover:bg-blue-50 dark:border-blue-600 dark:text-blue-400 dark:hover:bg-blue-900/30 transition-colors';
+  // 注入到官方卡片上的「不感兴趣」按钮：与「安装」同款蓝色描边。
+  // 原来用的是灰底 BTN_NEUTRAL，白卡上 hover 只从 #fff 变成 #f9fafb，几乎看不出来，
+  // 用户会以为"这个按钮没有动效"；蓝色 hover 才有和「安装」一样的反馈。
+  // ksp-btn 负责过渡 / 按压 / 焦点环，样式写在自己的 <style> 里（官方 dist 是静态编译
+  // 产物，Tailwind 已 purge，指望它的工具类随时会失效）。
+  var BTN_MARK = BTN_PRIMARY + ' ksp-btn';
+  // 二次确认态换成自有配色，避开 BTN_PRIMARY 的 hover 工具类（优先级更高，会盖掉背景色）
+  var BTN_MARK_ARMED = 'px-3 py-1.5 text-xs font-medium rounded-md border ksp-btn ksp-btn-armed';
   var BTN_DISABLED = 'px-3 py-1.5 text-xs font-medium rounded-md border border-gray-200 text-theme-faint cursor-default dark:border-gray-700';
   var PAGE_BTN = 'px-3 py-1.5 text-sm font-medium rounded-md border border-gray-300 text-theme-body hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:hover:bg-gray-800';
   // 标签胶囊：官方详情弹窗与自建卡片用同一套配色，只差字号
@@ -87,7 +95,9 @@
       clearAll: '清空名单',
       clearConfirm: '确定清空「不感兴趣」名单？清空后所有插件都会回到商店。',
       cleared: '名单已清空，正在重新加载插件商店',
-      saveFailed: '名单保存失败（本地存储不可写），这次标记没有生效'
+      saveFailed: '名单保存失败（本地存储不可写），这次标记没有生效',
+      confirm: '确认隐藏',
+      installTimeout: '安装请求超时（30 秒无响应），请稍后重试'
     },
     en: {
       tab: 'Not interested plugins',
@@ -118,7 +128,9 @@
       clearAll: 'Clear list',
       clearConfirm: 'Clear the "not interested" list? All plugins will return to the store.',
       cleared: 'List cleared, reloading the plugin store',
-      saveFailed: 'Could not save the list (local storage unavailable), nothing was hidden'
+      saveFailed: 'Could not save the list (local storage unavailable), nothing was hidden',
+      confirm: 'Confirm?',
+      installTimeout: 'Install request timed out (no response in 30s), please retry'
     }
   };
   // 当前语言的文案表
@@ -133,6 +145,8 @@
     // 标签文案平时由 ensureTab 每轮更新，但切语言通常只走快同步这条捷径，这里顺手改掉
     var tabBtn = document.getElementById(TAB_ID);
     if (tabBtn) tabBtn.textContent = T().tab;
+    // 按钮马上要被摘掉重建，确认态挂在旧节点上必须先收回
+    disarmConfirm();
     var old = document.querySelectorAll('[' + BTN_ATTR + ']');
     for (var i = 0; i < old.length; i++) {
       if (old[i].parentNode) old[i].parentNode.removeChild(old[i]);
@@ -243,6 +257,8 @@
   // 缓存商店列表（按 id 去重、与旧数据合并），并重建名称索引
   function ingestItems(list) {
     if (!Array.isArray(list) || !list.length) return;
+    // 商店数据到了：之前按标题存下的记录可能正好能升级成 id 记录
+    upgradeDirty = true;
     var seen = nullMap();
     var out = [];
     var i;
@@ -890,7 +906,11 @@
   // 早期版本在商店数据还没到时按「title:名称」存记录，这类记录只能靠标题认人，
   // 商店里同名插件一多就会连坐。数据到了以后把它升级成 id 记录，认领立刻变精确：
   // 标题在当前数据里必须唯一命中，否则不动（宁可继续按标题认，也不乱配）。
+  var upgradeDirty = true;
   function upgradeTitleRecords() {
+    // 每轮 tick 都全表扫一遍名单纯属浪费：只有"商店数据到了"或"名单变了"才可能升级成功
+    if (!upgradeDirty) return;
+    upgradeDirty = false;
     var keys = Object.keys(hidden);
     var changed = false;
     for (var i = 0; i < keys.length; i++) {
@@ -930,6 +950,8 @@
 
   // 把当前页所有已标记卡片隐藏（官方列表重渲染后也要补一次）
   function applyHidden(infos) {
+    // 卡片被 Vue 重渲染掉时确认态会挂在脱离文档的按钮上，永远等不到第二次点击
+    if (confirmState && !confirmState.btn.isConnected) disarmConfirm();
     upgradeTitleRecords();
     // 守卫：激活态下面板一旦被置成 display:none，官方面板又被 ksp-hide-store 藏着，
     // 屏幕上就什么都没有了。放在这里是因为 quickSync 的快捷分支只跑 applyHidden
@@ -950,10 +972,13 @@
       var card = list[j].card;
       if (!card.isConnected) continue;
       if (hiddenEntry(list[j].info)) {
-        card.style.display = 'none';
+        // 正在淡出的卡片由 hideCard 的定时器收尾，这里抢先把 display 关掉会看不见动画
+        if (!card.classList.contains('ksp-leaving')) card.style.display = 'none';
         if (touched.indexOf(card) < 0) touched.push(card);
-      } else if (card.style.display === 'none') {
+      } else if (card.style.display === 'none' || card.classList.contains('ksp-leaving')) {
         // 官方重排后可能复用了我们隐藏过的 DOM 节点：不该隐藏的要还原，否则会留下空位
+        // （淡出中途被取消同理，得把离场类摘掉，否则卡片停在 opacity:0 上）
+        card.classList.remove('ksp-leaving');
         card.style.display = '';
       }
     }
@@ -1016,8 +1041,19 @@
       return;
     }
     if (touched.indexOf(card) < 0) touched.push(card);
-    // 卡片当场消失，本页剩余卡片由 CSS grid 自动前移；不跨页补位
-    try { card.style.display = 'none'; } catch (e) { /* ignore */ }
+    // 名单里多了一条无 id 记录，下一轮试着升级它
+    upgradeDirty = true;
+    // 卡片当场淡出，160ms 后让网格收拢（本页剩余卡片自动前移；不跨页补位）。
+    // 淡出期间卡片还占着位置，applyHidden 看到 ksp-leaving 会跳过它，不抢先把 display 关掉。
+    try { card.classList.add('ksp-leaving'); } catch (e) { /* ignore */ }
+    setTimeout(function () {
+      // 期间被取消（名单还原）时 applyHidden 会摘掉这个类，这里就别再关显示了
+      try {
+        if (!card.classList.contains('ksp-leaving')) return;
+        card.classList.remove('ksp-leaving');
+        card.style.display = 'none';
+      } catch (e) { /* ignore */ }
+    }, 170);
     if (mineActive) renderMine();
   }
 
@@ -1081,6 +1117,40 @@
   }
 
   // 给商店卡片补「不感兴趣」按钮；装好后自动摘掉
+  // ---------------------------------------------------------------- 二次确认
+  // 「不感兴趣」是破坏性操作：卡片当场消失，想撤回得切到另一个标签页。一次误点代价不小，
+  // 所以做成两段式——第一次点只把按钮变成确认态（4s 无操作自动回退），第二次点才真的隐藏。
+  // 全局同时只允许一个按钮处于确认态：点别的卡片、按 Esc、点页面空白处、切语言、
+  // 卡片被官方重渲染掉，任何一种情况都先收回，免得出现"点哪都没反应"的错觉。
+  var CONFIRM_MS = 4000;
+  var confirmState = null;
+  function disarmConfirm(btn) {
+    var st = confirmState;
+    if (!st) return;
+    if (btn && st.btn !== btn) return;
+    confirmState = null;
+    if (st.timer) clearTimeout(st.timer);
+    var b = st.btn;
+    if (!b) return;
+    try {
+      b.removeAttribute('data-ksp-armed');
+      b.className = st.cls;
+      b.textContent = st.label;
+    } catch (e) { /* ignore */ }
+  }
+  function armConfirm(btn) {
+    disarmConfirm();
+    confirmState = {
+      btn: btn,
+      cls: btn.className,
+      label: btn.textContent,
+      timer: setTimeout(function () { disarmConfirm(btn); }, CONFIRM_MS)
+    };
+    btn.setAttribute('data-ksp-armed', '1');
+    btn.className = BTN_MARK_ARMED + ' mr-2';
+    btn.textContent = T().confirm;
+  }
+
   function ensureCardButtons(infos) {
     var list = infos || cardInfos();
     for (var i = 0; i < list.length; i++) {
@@ -1091,15 +1161,19 @@
       var info = list[i].info;
       // 已安装的插件不再需要"不感兴趣"；安装状态变化时还要把残留的按钮摘掉
       if (isInstalledCard(card, row, info)) {
-        if (existing) row.removeChild(existing);
+        // 摘按钮前先收回确认态：确认态挂在被摘掉的节点上，用户会以为点了没反应
+        if (existing) { disarmConfirm(existing); row.removeChild(existing); }
         continue;
       }
       if (existing) continue;
       if (!info) continue;
-      var btn = clickBtn(BTN_NEUTRAL + ' mr-2', T().mark, function (self) {
+      var btn = clickBtn(BTN_MARK + ' mr-2', T().mark, function (self) {
         var c = self.__knCard;
-        if (!c || !c.isConnected) return;
+        if (!c || !c.isConnected) { disarmConfirm(self); return; }
+        // 第一下只进入确认态；第二下才隐藏
+        if (self.getAttribute('data-ksp-armed') !== '1') { armConfirm(self); return; }
         var inf = keyOf(c) || self.__knInfo;
+        disarmConfirm(self);
         if (!inf) return;
         hideCard(c, inf.item, inf.key, inf.title);
       });
@@ -1169,7 +1243,20 @@
     st.textContent =
       '.ksp-hide-store{display:none !important;}' +
       '#ksp-panel img{max-width:100%;}' +
-      '#' + TAB_ID + '{white-space:nowrap;}';
+      '#' + TAB_ID + '{white-space:nowrap;}' +
+      // 按钮动效：过渡曲线与官方按钮同一套（cubic-bezier(.4,0,.2,1) / .15s），
+      // 另外补上官方没有的按压缩放与键盘焦点环。
+      '.ksp-btn{transition:background-color .15s cubic-bezier(.4,0,.2,1),color .15s cubic-bezier(.4,0,.2,1),border-color .15s cubic-bezier(.4,0,.2,1),box-shadow .15s cubic-bezier(.4,0,.2,1),transform .1s cubic-bezier(.4,0,.2,1);}' +
+      '.ksp-btn:active:not(:disabled){transform:scale(.94);}' +
+      '.ksp-btn:focus-visible{outline:2px solid #2563eb;outline-offset:2px;}' +
+      // 确认态：琥珀色，和蓝色"可点"态一眼能分开
+      '.ksp-btn-armed{background:#fef3c7;border-color:#f59e0b;color:#b45309;}' +
+      '.ksp-btn-armed:hover{background:#fde68a;}' +
+      '.dark .ksp-btn-armed{background:rgba(245,158,11,.16);border-color:#b45309;color:#fbbf24;}' +
+      '.dark .ksp-btn-armed:hover{background:rgba(245,158,11,.26);}' +
+      // 卡片离场：先淡出再让网格收拢，直接 display:none 是"啪"地消失，看不出发生了什么
+      '.ksp-leaving{opacity:0;transform:scale(.97);transition:opacity .16s ease,transform .16s ease;pointer-events:none;}' +
+      '@media (prefers-reduced-motion: reduce){.ksp-btn,.ksp-leaving{transition:none;}.ksp-btn:active:not(:disabled){transform:none;}}';
     (document.head || document.documentElement).appendChild(st);
   }
 
@@ -1254,6 +1341,8 @@
   // ---------------------------------------------------------------- 自定义页渲染
   function el(tag, cls, txt) {
     var n = document.createElement(tag);
+    // 自有节点标记：MutationObserver 靠它把"自己画的界面"和"官方渲染的界面"分开
+    n.__ksp = 1;
     if (cls) n.className = cls;
     if (txt != null) n.textContent = txt;
     return n;
@@ -1408,13 +1497,34 @@
     var started = false;
     btn.disabled = true;
     btn.textContent = T().installing;
-    fetch('/api/plugins/install/github/tasks', {
-      method: 'POST',
-      headers: headers,
-      // gh_proxy: 'auto' 与官方商店安装一致（PluginView.vue:2509）：后端会测速挑最快的镜像。
-      // 不带这个字段后端直连 github.com，国内网络下经常下载失败。
-      body: JSON.stringify({ repo_url: snap.repo, gh_proxy: 'auto', commit_sha: sha })
-    }).then(function (res) {
+    // 后端要先测速挑镜像再下载，几十秒很正常；没有超时兜底的话按钮会永远停在
+    // 「安装中...」上，用户只能刷新页面。30s 后主动 abort，把按钮还回去。
+    var ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+    var killTimer = ctrl ? setTimeout(function () {
+      try { ctrl.abort(); } catch (e) { /* ignore */ }
+    }, 30000) : null;
+    function release() {
+      if (killTimer) { clearTimeout(killTimer); killTimer = null; }
+    }
+    var req;
+    try {
+      req = fetch('/api/plugins/install/github/tasks', {
+        method: 'POST',
+        headers: headers,
+        // gh_proxy: 'auto' 与官方商店安装一致（PluginView.vue:2509）：后端会测速挑最快的镜像。
+        // 不带这个字段后端直连 github.com，国内网络下经常下载失败。
+        body: JSON.stringify({ repo_url: snap.repo, gh_proxy: 'auto', commit_sha: sha }),
+        signal: ctrl ? ctrl.signal : undefined
+      });
+    } catch (e3) {
+      // fetch 自己抛（被浏览器策略拦下、参数非法）时同样不能让按钮卡死
+      release();
+      btn.disabled = false;
+      btn.textContent = old;
+      toast(T().installFailed + ': ' + (e3 && e3.message ? e3.message : e3), 'err');
+      return;
+    }
+    req.then(function (res) {
       if (res.ok) {
         started = true;
         toast(T().installStarted);
@@ -1432,8 +1542,12 @@
           throw new Error('HTTP ' + res.status + (detail ? ': ' + detail : ''));
         });
     }).catch(function (e) {
-      toast(T().installFailed + ': ' + (e && e.message ? e.message : e), 'err');
+      // abort 的原始报错是 "The user aborted a request."，对用户没有意义
+      var msg = e && e.message ? e.message : e;
+      if (e && e.name === 'AbortError') msg = T().installTimeout;
+      toast(T().installFailed + ': ' + msg, 'err');
     }).then(function () {
+      release();
       // 提交成功后保持「已安装」的禁用态：任务已入队，再点一次只会多排一个安装任务
       if (started) {
         btn.textContent = T().installed;
@@ -1447,6 +1561,10 @@
   }
 
   // 轻提示，2.6s 后自动消失
+  // requestAnimationFrame 在老浏览器/测试环境里可能不存在，缺了就直接下一帧
+  var nextFrame = typeof window.requestAnimationFrame === 'function'
+    ? function (f) { return window.requestAnimationFrame(f); }
+    : function (f) { return setTimeout(f, 16); };
   function toast(msg, kind) {
     var box = document.getElementById('ksp-toast');
     if (!box) {
@@ -1455,12 +1573,15 @@
       box.style.cssText = 'position:fixed;left:50%;bottom:34px;transform:translateX(-50%);z-index:99999;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none;';
       document.body.appendChild(box);
     }
+    // 连点几下时提示会叠成一大坨，最多留 4 条
+    while (box.children.length >= 4) box.removeChild(box.firstChild);
     var bg = kind === 'err' ? 'background:#b91c1c;' : 'background:#111827;';
     var item = document.createElement('div');
     item.style.cssText = 'padding:8px 14px;border-radius:8px;font-size:13px;color:#fff;box-shadow:0 8px 24px rgba(0,0,0,.18);opacity:0;transition:opacity .18s ease;' + bg;
     item.textContent = String(msg);
+    item.__ksp = 1;
     box.appendChild(item);
-    requestAnimationFrame(function () { item.style.opacity = '1'; });
+    nextFrame(function () { item.style.opacity = '1'; });
     setTimeout(function () {
       item.style.opacity = '0';
       setTimeout(function () { if (item.parentNode) item.parentNode.removeChild(item); }, 220);
@@ -1506,6 +1627,8 @@
   var timer = null;
   // 主循环：维持标签 / 面板 / 样式 / 隐藏状态
   function tick() {
+    // 标签页在后台时不做 DOM 同步：浏览器照样跑定时器，2.5s 一轮白烧 CPU
+    if (document.visibilityState === 'hidden') return;
     // 视图状态必须每轮复位：详情弹窗挂在 body 上，离开插件页后不会自己消失。
     try { reclaimViewState(); } catch (e) { /* ignore */ }
     // 既没有官方标签栏也没有我们的面板 = 不在插件页。此时后面的同步全是白跑：
@@ -1531,22 +1654,59 @@
     timer = setTimeout(function () { timer = null; tick(); }, 120);
   }
 
+  // 我们自己的节点（面板 / 吐司 / 弹窗 / 注入的按钮）引起的 DOM 变化不该触发同步：
+  // 渲染自建页一次插入十几张卡片，每张都让主循环白扫一遍网格。
+  function isMineNode(n) {
+    if (!n || n.nodeType !== 1) return true;
+    if (n.__ksp) return true;
+    if (n.id === PANEL_ID || n.id === 'ksp-toast' || n.id === 'ksp-style' || n.id === TAB_ID) return true;
+    return !!(n.closest && n.closest('#' + PANEL_ID + ',#ksp-toast,[data-ksp-dlg]'));
+  }
+  function onlyMineMutations(muts) {
+    for (var i = 0; i < muts.length; i++) {
+      var m = muts[i];
+      if (!m) continue;
+      if (!isMineNode(m.target)) return false;
+      var added = m.addedNodes || [];
+      for (var j = 0; j < added.length; j++) if (!isMineNode(added[j])) return false;
+      var gone = m.removedNodes || [];
+      for (var k = 0; k < gone.length; k++) if (!isMineNode(gone[k])) return false;
+    }
+    return true;
+  }
+
   // 首次运行，并监听 DOM 变化持续同步
   function boot() {
     tick();
     try {
       var mo = new MutationObserver(function (muts) {
+        if (onlyMineMutations(muts)) return;
         if (touchesStoreGrid(muts)) quickSync();
         else schedule();
       });
       mo.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] });
     } catch (e) { /* ignore */ }
     setInterval(tick, 2500);
+    // 确认态是挂在按钮上的临时状态：按 Esc 或点页面别处都算反悔
+    document.addEventListener('keydown', function (ev) {
+      if (confirmState && ev && (ev.key === 'Escape' || ev.key === 'Esc')) disarmConfirm();
+    }, true);
+    document.addEventListener('click', function (ev) {
+      var st = confirmState;
+      if (!st || !ev) return;
+      var t = ev.target;
+      // 点确认态按钮本身不算反悔（否则第二次点击会被这里先撤掉，永远藏不掉）
+      if (t && st.btn && (t === st.btn || (st.btn.contains && st.btn.contains(t)))) return;
+      disarmConfirm();
+    }, true);
     window.addEventListener('storage', function (ev) {
       // 别的标签页改了名单：同样要经过合并，避免把重复记录又带回来
       if (ev && ev.key === LS_KEY) {
+        // 别的标签页的改动是权威的，本页"刚删过这个键"的记录不能再挡它
+        removedKeys = nullMap();
         hidden = normalizeHidden(loadHidden());
         invalidateHiddenIndex();
+        upgradeDirty = true;
         if (mineActive) renderMine();
         applyHidden();
       }
