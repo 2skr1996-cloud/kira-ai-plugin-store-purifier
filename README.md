@@ -4,7 +4,7 @@
 
 给 KiraAI 插件商店加一个「不感兴趣」按钮，把不想再看到的插件收进独立标签页。
 
-[![Release](https://img.shields.io/github/v/release/2skr1996-cloud/kira-ai-plugin-store-purifier?style=flat-square&color=4D6BFE)](https://github.com/2skr1996-cloud/kira-ai-plugin-store-purifier/releases)
+[![Release](https://img.shields.io/github/v/release/2skr1996-cloud/kira-ai-plugin-store-purifier?style=flat-square&label=release&color=4D6BFE)](https://github.com/2skr1996-cloud/kira-ai-plugin-store-purifier/releases)
 [![License](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)](LICENSE)
 [![KiraAI](https://img.shields.io/badge/KiraAI-%E2%89%A5%203.0.0-8b5cf6?style=flat-square)](https://github.com/KiraAI-Dev/KiraAI)
 [![powered by dsh](https://img.shields.io/badge/powered_by-dsh-4D6BFE?style=flat-square&logo=deepseek&logoColor=white)](https://github.com/deepseek-ai/deepseek-harness)
