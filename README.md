@@ -1,56 +1,68 @@
+<div align="center">
+
 # 商店净化 · Store Purifier
 
-<p align="center">
-  <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="https://img.shields.io/badge/powered_by-dsh-4D6BFE?style=flat-square&logo=deepseek&logoColor=white" alt="powered by dsh" /></a>
-</p>
+给 KiraAI 插件商店加一个「不感兴趣」按钮，把不想再看到的插件收进独立标签页。
 
-给 KiraAI 的插件商店加一个「不感兴趣」按钮，把不想再看到的插件收进独立标签页。
+[![Release](https://img.shields.io/github/v/release/2skr1996-cloud/kira-ai-plugin-store-purifier?style=flat-square&color=4D6BFE)](https://github.com/2skr1996-cloud/kira-ai-plugin-store-purifier/releases)
+[![License](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)](LICENSE)
+[![KiraAI](https://img.shields.io/badge/KiraAI-%E2%89%A5%203.0.0-8b5cf6?style=flat-square)](https://github.com/KiraAI-Dev/KiraAI)
+[![powered by dsh](https://img.shields.io/badge/powered_by-dsh-4D6BFE?style=flat-square&logo=deepseek&logoColor=white)](https://github.com/deepseek-ai/deepseek-harness)
 
-> **本项目的全部代码——浏览器脚本、Python 注入器和这份文档——都由 AI 生成**（DeepSeek），人类只负责提出需求、确认交互和验收结果。
+<img src="docs/preview.png" alt="插件商店预览" width="900">
+
+</div>
 
 ## 功能
 
-- 商店每张卡片的按钮行左侧多一个 **不感兴趣**（已安装的插件不显示）：点一下卡片消失、本页剩余卡片往上顶；不从下一页借卡，空位等官方下次刷新重排。
-- 标签栏「插件商店」右侧多一个 **不感兴趣插件** 页，每页 12 张，可查看详情、取消标记、直接安装。
-- 取消后若该插件已被响应过滤剔出当前列表，要等官方下次拉取才回商店。
-- 名单只存当前浏览器的 localStorage，不上传、不同步。
+| 功能 | 说明 |
+| --- | --- |
+| **卡片按钮** | 商店每张卡片左侧多一个「不感兴趣」，点一下卡片淡出消失，本页剩余卡片自动上移 |
+| **二次确认** | 第一下变成「确认隐藏」，再点才生效；点别处或 4 秒后自动取消 |
+| **独立标签页** | 标签栏多一个「不感兴趣插件」，集中收纳已标记的插件，可看详情、取消标记、直接安装 |
+| **纯本地** | 名单只存在当前浏览器，不上传、不同步 |
 
 ## 安装
 
-把插件目录放进 KiraAI 的 `data/plugins/kira-ai-plugin-store-purifier/`，然后重启或在插件面板启用。加载时脚本会写进 `data/dist` 并注入 `index.html`，`serve_spa()` 每次请求读盘且禁缓存，立即生效、无需重启 KiraAI。
+1. 把插件目录放进 `data/plugins/kira-ai-plugin-store-purifier/`
+2. 重启 KiraAI，或在插件面板里启用
+3. 打开「附加功能 → 插件商店」，按钮就出现了
+
+> 加载时会自动写入 `data/dist` 并注入 `index.html`，不需要手动改前端文件。
+
+## 使用
+
+- **隐藏**：点「不感兴趣」→ 再点「确认隐藏」→ 卡片消失
+- **恢复**：切到「不感兴趣插件」页 → 点「取消不感兴趣」
+- 恢复的插件要等商店下次刷新才会回到列表
+
+## 卸载
+
+停用插件即可，注入会自动移除。名单留在浏览器里（`kira.pluginStore.notInterested.v1`）。
+
+## 命令行（可选）
 
 ```bash
-python injector.py                 # 同步脚本 + 注入
+python injector.py                 # 手动同步 + 注入
 python injector.py --remove        # 移除，恢复原状
 python injector.py --dist <dir>    # 指定 dist 目录
 ```
 
-## 卸载
+## 原理
 
-停用插件即可（`terminate()` 会移除注入并删掉脚本），也可 `python injector.py --remove`。名单留在浏览器（`kira.pluginStore.notInterested.v1`）。
-
-## 工作原理
-
-启动时把 `web/store-purifier.js` 同步进 `data/dist`，在 `</head>` 前注入带版本号的 `<script>`：
-
-```html
-<!-- store-purifier:start -->
-<script src="/store-purifier.js?v=<版本>" defer></script>
-<!-- store-purifier:end -->
-```
-
-官方升级用 dist.zip 整包覆盖 `data/dist` 时，注入块会跟着一起被抹掉。所以插件在 `initialize()` 里给官方的 `core.utils.dist_checker.apply_dist_archive` 挂了一层钩子：WebUI 里点「更新」是在**旧进程**里覆盖 dist 的，钩子就在覆盖返回的那一刻立刻补注入，并把仍持有旧函数对象的模块（`webui.routes.releases` 等）一并重绑定，空窗从原来的约 37 秒压到 0；覆盖发生在别的进程（launcher 的 `ensure_dist`）时，仍靠启动注入 + 15 秒兜底检查补上。`?v=` 保证不吃旧缓存。
-
-写回 `index.html` 很保守——只认合法 UTF-8，否则拒绝并告警；CRLF 原样写回；写前复核 mtime/size，撞上官方的整目录替换就放弃这一轮（避免白屏）；临时文件 + 原子替换；磁盘操作全在线程池，网络盘不会卡住主进程。`sync` 后再 `--remove` 能逐字节还原。
-
-界面全在脚本里：定位商店网格、给卡片补按钮、拦截 `/api/plugin-store/fetch` 响应剔掉已隐藏项、渲染自建页、复刻官方样式做详情弹窗。
+- 启动时把 `web/store-purifier.js` 同步进 `data/dist`，在 `</head>` 前注入带版本号的 `<script>`。
+- 官方升级整包覆盖 `data/dist` 时，插件会立刻补回注入，不留空窗。
+- 写回 `index.html` 只认合法 UTF-8，原子替换；失败就放弃这一轮，不会写坏页面。
 
 ## 已知限制
 
 - 名单按浏览器保存，换浏览器或清缓存会丢。
 - 依赖官方 DOM 结构与文案，官方大改版可能需要适配。
-- 只对 `data/dist` 生效；换部署方式要改 `injector.find_dist_dir()`。
 
 ## License
 
 [MIT](LICENSE) © 2026 sijun
+
+---
+
+<sub>本项目代码与文档由 AI 生成，人类负责需求与验收。</sub>
